@@ -5,7 +5,7 @@ OPENCV_CFLAGS := $(shell pkg-config --cflags opencv4)
 OPENCV_LIBS   := $(shell pkg-config --libs opencv4)
 OTHER_LIBS := -lncurses
 
-TARGET := thermal_view
+TARGET := warpAffineExample
 SRC := main.cpp
 
 all: $(TARGET)

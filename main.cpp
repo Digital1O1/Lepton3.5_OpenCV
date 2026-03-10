@@ -1,9 +1,23 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <iomanip>
-
+#include <ncurses.h>
+#include <string>
+#include <cstring>
 int main()
 {
+    // Initialize ncurses
+    initscr();            // Start curses mode
+    cbreak();             // Line buffering disabled, pass on ctrl characters
+    noecho();             // Don't echo input to the screen
+    keypad(stdscr, TRUE); // Enable special keys (like arrow keys)
+
+    // Set stdscr to non-blocking mode
+    nodelay(stdscr, TRUE); // Make getch() non-blocking, returns ERR if no input
+
+    printw("Press keys (press 'q' to quit). The program loop is running.\n");
+    printw("Output will update every 0.5 seconds.\n");
+
     cv::VideoCapture thermalCamera("/dev/video0", cv::CAP_V4L2);
 
     /*
@@ -37,19 +51,18 @@ int main()
     thermalCamera.set(cv::CAP_PROP_FRAME_WIDTH, 160);
     thermalCamera.set(cv::CAP_PROP_FRAME_HEIGHT, 120);
 
-    std::cout << "Lepton 3.5 Radiometric Viewer" << std::endl;
-    std::cout << "Controls:" << std::endl;
-    std::cout << "  'q' - Quit" << std::endl;
-    std::cout << "  's' - Save thermalFrames" << std::endl;
-    std::cout << "  'a' - Auto-scale mode" << std::endl;
-    std::cout << "  'm' - Manual scale mode (fixed range)" << std::endl;
-    std::cout << "  'h' - Flip horizontal" << std::endl;
-    std::cout << "  'v' - Flip vertical" << std::endl;
-    std::cout << "\n";
+    // std::cout << "Lepton 3.5 Radiometric Viewer" << std::endl;
+    // std::cout << "Controls:" << std::endl;
+    // std::cout << "  'q' - Quit" << std::endl;
+    // std::cout << "  's' - Save thermalFrames" << std::endl;
+    // std::cout << "  'a' - Auto-scale mode" << std::endl;
+    // std::cout << "  'm' - Manual scale mode (fixed range)" << std::endl;
+    // std::cout << "  'h' - Flip horizontal" << std::endl;
+    // std::cout << "  'v' - Flip vertical" << std::endl;
+    // std::cout << "\n";
 
     cv::Mat thermalFrames, thermal, visible;
-    cv::Mat edges, gray;
-    cv::Mat thermalAndVisible;
+    cv::Mat gray, edges;
 
     int frame_count = 0;
     bool auto_scale = true;
@@ -66,8 +79,39 @@ int main()
     double scale_min = 27000; // ~20°C
     double scale_max = 31000; // ~37°C
 
-    while (true)
+    // Nurcses input
+    int ch;
+    bool running = true;
+    int loop_count = 0;
+
+    // Warp transformation
+    double dx = 50.0; // Shift 50px right
+    double dy = 30.0; // Shift 30px down
+    cv::Mat warped;
+
+    cv::Mat M = (cv::Mat_<double>(2, 3) << 1, 0, dx, 0, 1, dy);
+
+    while (running)
     {
+        // Non-blocking input check
+        ch = getch();
+
+        if (ch != ERR)
+        {
+            // Input received
+            if (ch == 'q')
+            {
+                running = false; // Exit the loop if 'q' is pressed
+            }
+            else
+            {
+                // Handle other input
+                mvprintw(3, 0, "Key pressed: %c (code: %d)   ", ch, ch);
+                // Move cursor to a consistent position and refresh the display of the input
+                refresh();
+            }
+        }
+
         thermalCamera >> thermalFrames;
         visibleCamera >> visible;
 
@@ -120,11 +164,11 @@ int main()
         uint16_t centerRaw = thermal.at<uint16_t>(60, 80);
         double centerT = (centerRaw / 100.0) - 273.15;
 
-        std::cout << "\rFrame " << frame_count
-                  << " | Min: " << std::fixed << std::setprecision(1) << minT << "°C"
-                  << " | Max: " << maxT << "°C"
-                  << " | Center: " << centerT << "°C"
-                  << " | Range: " << (maxT - minT) << "°C     " << std::flush;
+        // std::cout << "\rFrame " << frame_count
+        //           << " | Min: " << std::fixed << std::setprecision(1) << minT << "°C"
+        //           << " | Max: " << maxT << "°C"
+        //           << " | Center: " << centerT << "°C"
+        //           << " | Range: " << (maxT - minT) << "°C     " << std::flush;
 
         // ----------- Thermal Display Creation -----------
 
@@ -146,32 +190,42 @@ int main()
         cv::Mat colored;
         cv::applyColorMap(thermalDisplay, colored, cv::COLORMAP_JET);
 
-        // Resize thermal to match visible
+        // Resize thermal to match visible resolution
         cv::Mat thermalResized;
         cv::resize(colored, thermalResized, visible.size(), 0, 0, cv::INTER_NEAREST);
 
-        // ----------- Edge Overlay (Correct Way) -----------
+        // ----------- Mask-Based Edge Overlay -----------
 
         cv::Mat overlay = visible.clone();
 
+        // Resize edges if needed (safety)
+        cv::Mat edgesResized;
+        cv::resize(edges, edgesResized, visible.size(), 0, 0, cv::INTER_NEAREST);
+
+        // Create binary mask
         cv::Mat mask;
-        cv::threshold(edges, mask, 0, 255, cv::THRESH_BINARY);
+        cv::threshold(edgesResized, mask, 0, 255, cv::THRESH_BINARY);
 
-        cv::Mat redOverlay(visible.size(), CV_8UC3, cv::Scalar(0, 0, 255));
-        redOverlay.copyTo(overlay, mask);
+        // Create red edge image
+        cv::Mat redEdges(visible.size(), CV_8UC3, cv::Scalar(0, 0, 255));
 
-        // ----------- Thermal Fusion (Optional Layering) -----------
+        // Apply red only where edges exist
+        redEdges.copyTo(overlay, mask);
+
+        // ----------- Combine Visible (with edges) + Thermal -----------
 
         cv::Mat fusion;
-        double thermalAlpha = 0.4;
+        double thermalAlpha = 0.4; // adjust for transparency
         cv::addWeighted(overlay, 1.0, thermalResized, thermalAlpha, 0.0, fusion);
 
         // ----------- Display -----------
 
-        cv::hconcat(overlay, fusion, thermalAndVisible);
+        cv::Mat combined;
+        cv::hconcat(overlay, fusion, combined);
 
-        cv::imshow("Visible | Thermal Fusion", thermalAndVisible);
-        cv::imshow("Canny Edge Detection", edges);
+        // cv::imshow("Visible (Edges) | Fusion", combined);
+        // cv::imshow("Thermal Only", thermalResized);
+        // cv::imshow("Edges", edges);
 
         char key = cv::waitKey(1);
         if (key == 27 || key == 'q')
@@ -203,7 +257,8 @@ int main()
         }
     }
 
-    std::cout << "\nDone!" << std::endl;
+    // std::cout << "\nDone!" << std::endl;
+    endwin(); // End curses mode
     thermalCamera.release();
     visibleCamera.release();
     cv::destroyAllWindows();
